@@ -1,0 +1,182 @@
+diff --git a/pngrutil.original.c b/pngrutil.c
+index b56315e..aa14e7e 100644
+--- a/pngrutil.original.c
++++ b/pngrutil.c
+@@ -14,16 +14,36 @@
+  * libpng itself during the course of reading an image.
+  */
+ 
++#import <limits.h>
++#import <stddef.h>
++
++// from png.h
++#define PNG_FILTER_VALUE_NONE  0
++#define PNG_FILTER_VALUE_SUB   1
++#define PNG_FILTER_VALUE_UP    2
++#define PNG_FILTER_VALUE_AVG   3
++#define PNG_FILTER_VALUE_PAETH 4
++#define PNG_FILTER_VALUE_LAST  5
++
++// from pngconf.h
++#if CHAR_BIT == 8 && UCHAR_MAX == 255
++   typedef unsigned char png_byte;
++#else
++#  error "libpng requires 8 bit bytes"
++#endif
++typedef png_byte              * png_bytep;
++typedef const png_byte        * png_const_bytep;
++
+ static void
+-png_read_filter_row_sub(png_row_infop row_info, png_bytep row,
++png_read_filter_row_sub(size_t rowbytes, png_byte pixel_depth, png_bytep row,
+     png_const_bytep prev_row)
+ {
+    size_t i;
+-   size_t istop = row_info->rowbytes;
+-   unsigned int bpp = (row_info->pixel_depth + 7) >> 3;
++   size_t istop = rowbytes;
++   unsigned int bpp = (pixel_depth + 7) >> 3;
+    png_bytep rp = row + bpp;
+ 
+-   PNG_UNUSED(prev_row)
++   //PNG_UNUSED(prev_row)
+ 
+    for (i = bpp; i < istop; i++)
+    {
+@@ -33,11 +53,11 @@ png_read_filter_row_sub(png_row_infop row_info, png_bytep row,
+ }
+ 
+ static void
+-png_read_filter_row_up(png_row_infop row_info, png_bytep row,
++png_read_filter_row_up(size_t rowbytes, png_byte pixel_depth, png_bytep row,
+     png_const_bytep prev_row)
+ {
+    size_t i;
+-   size_t istop = row_info->rowbytes;
++   size_t istop = rowbytes;
+    png_bytep rp = row;
+    png_const_bytep pp = prev_row;
+ 
+@@ -49,14 +69,14 @@ png_read_filter_row_up(png_row_infop row_info, png_bytep row,
+ }
+ 
+ static void
+-png_read_filter_row_avg(png_row_infop row_info, png_bytep row,
++png_read_filter_row_avg(size_t rowbytes, png_byte pixel_depth, png_bytep row,
+     png_const_bytep prev_row)
+ {
+    size_t i;
+    png_bytep rp = row;
+    png_const_bytep pp = prev_row;
+-   unsigned int bpp = (row_info->pixel_depth + 7) >> 3;
+-   size_t istop = row_info->rowbytes - bpp;
++   unsigned int bpp = (pixel_depth + 7) >> 3;
++   size_t istop = rowbytes - bpp;
+ 
+    for (i = 0; i < bpp; i++)
+    {
+@@ -76,10 +96,10 @@ png_read_filter_row_avg(png_row_infop row_info, png_bytep row,
+ }
+ 
+ static void
+-png_read_filter_row_paeth_1byte_pixel(png_row_infop row_info, png_bytep row,
++png_read_filter_row_paeth_1byte_pixel(size_t rowbytes, png_byte pixel_depth, png_bytep row,
+     png_const_bytep prev_row)
+ {
+-   png_bytep rp_end = row + row_info->rowbytes;
++   png_bytep rp_end = row + rowbytes;
+    int a, c;
+ 
+    /* First pixel/byte */
+@@ -127,10 +147,10 @@ png_read_filter_row_paeth_1byte_pixel(png_row_infop row_info, png_bytep row,
+ }
+ 
+ static void
+-png_read_filter_row_paeth_multibyte_pixel(png_row_infop row_info, png_bytep row,
++png_read_filter_row_paeth_multibyte_pixel(size_t rowbytes, png_byte pixel_depth, png_bytep row,
+     png_const_bytep prev_row)
+ {
+-   unsigned int bpp = (row_info->pixel_depth + 7) >> 3;
++   unsigned int bpp = (pixel_depth + 7) >> 3;
+    png_bytep rp_end = row + bpp;
+ 
+    /* Process the first pixel in the row completely (this is the same as 'up'
+@@ -143,7 +163,7 @@ png_read_filter_row_paeth_multibyte_pixel(png_row_infop row_info, png_bytep row,
+    }
+ 
+    /* Remainder */
+-   rp_end = rp_end + (row_info->rowbytes - bpp);
++   rp_end = rp_end + (rowbytes - bpp);
+ 
+    while (row < rp_end)
+    {
+@@ -177,56 +197,24 @@ png_read_filter_row_paeth_multibyte_pixel(png_row_infop row_info, png_bytep row,
+    }
+ }
+ 
+-static void
+-png_init_filter_functions(png_structrp pp)
+-   /* This function is called once for every PNG image (except for PNG images
+-    * that only use PNG_FILTER_VALUE_NONE for all rows) to set the
+-    * implementations required to reverse the filtering of PNG rows.  Reversing
+-    * the filter is the first transformation performed on the row data.  It is
+-    * performed in place, therefore an implementation can be selected based on
+-    * the image pixel format.  If the implementation depends on image width then
+-    * take care to ensure that it works correctly if the image is interlaced -
+-    * interlacing causes the actual row width to vary.
+-    */
+-{
+-   unsigned int bpp = (pp->pixel_depth + 7) >> 3;
+-
+-   pp->read_filter[PNG_FILTER_VALUE_SUB-1] = png_read_filter_row_sub;
+-   pp->read_filter[PNG_FILTER_VALUE_UP-1] = png_read_filter_row_up;
+-   pp->read_filter[PNG_FILTER_VALUE_AVG-1] = png_read_filter_row_avg;
+-   if (bpp == 1)
+-      pp->read_filter[PNG_FILTER_VALUE_PAETH-1] =
+-         png_read_filter_row_paeth_1byte_pixel;
+-   else
+-      pp->read_filter[PNG_FILTER_VALUE_PAETH-1] =
+-         png_read_filter_row_paeth_multibyte_pixel;
+-
+-#ifdef PNG_FILTER_OPTIMIZATIONS
+-   /* To use this define PNG_FILTER_OPTIMIZATIONS as the name of a function to
+-    * call to install hardware optimizations for the above functions; simply
+-    * replace whatever elements of the pp->read_filter[] array with a hardware
+-    * specific (or, for that matter, generic) optimization.
+-    *
+-    * To see an example of this examine what configure.ac does when
+-    * --enable-arm-neon is specified on the command line.
+-    */
+-   PNG_FILTER_OPTIMIZATIONS(pp, bpp);
+-#endif
+-}
+-
+ void /* PRIVATE */
+-png_read_filter_row(png_structrp pp, png_row_infop row_info, png_bytep row,
++png_read_filter_row(size_t rowbytes, png_byte pixel_depth, png_bytep row,
+     png_const_bytep prev_row, int filter)
+ {
+-   /* OPTIMIZATION: DO NOT MODIFY THIS FUNCTION, instead #define
+-    * PNG_FILTER_OPTIMIZATIONS to a function that overrides the generic
+-    * implementations.  See png_init_filter_functions above.
+-    */
+    if (filter > PNG_FILTER_VALUE_NONE && filter < PNG_FILTER_VALUE_LAST)
+    {
+-      if (pp->read_filter[0] == NULL)
+-         png_init_filter_functions(pp);
++      unsigned int bpp = (pixel_depth + 7) >> 3;
+ 
+-      pp->read_filter[filter-1](row_info, row, prev_row);
++      if (filter == PNG_FILTER_VALUE_SUB)
++         png_read_filter_row_sub(rowbytes, pixel_depth, row, prev_row);
++      if (filter == PNG_FILTER_VALUE_UP)
++         png_read_filter_row_up(rowbytes, pixel_depth, row, prev_row);
++      if (filter == PNG_FILTER_VALUE_AVG)
++         png_read_filter_row_avg(rowbytes, pixel_depth, row, prev_row);
++      if (filter == PNG_FILTER_VALUE_PAETH)
++         if (bpp == 1)
++            png_read_filter_row_paeth_1byte_pixel(rowbytes, pixel_depth, row, prev_row);
++         else
++            png_read_filter_row_paeth_multibyte_pixel(rowbytes, pixel_depth, row, prev_row);
+    }
+ }

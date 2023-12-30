@@ -1,0 +1,14 @@
+image: ubuntu:latest
+
+stages:
+  - run
+
+run:
+  stage: run
+  script:
+  - apt-get update > /dev/null && apt-get install -y git emscripten > /dev/null
+  - ./build.sh
+  artifacts:
+    paths:
+    - "*.patch"
+    - "a.out.*"

@@ -1,0 +1,160 @@
+diff --git a/puff.original.c b/puff.c
+index 6737ff6..605022a 100644
+--- a/puff.original.c
++++ b/puff.c
+@@ -1,3 +1,5 @@
++#define INFLATE_ALLOW_INVALID_DISTANCE_TOOFAR_ARRR 1
++
+ /*
+  * puff.c
+  * Copyright (C) 2002-2013 Mark Adler
+@@ -80,7 +82,7 @@
+  */
+ 
+ #include <setjmp.h>             /* for setjmp(), longjmp(), and jmp_buf */
+-#include "puff.h"               /* prototype for puff() */
++#define NIL 0
+ 
+ #define local static            /* for local function definitions */
+ 
+@@ -176,16 +178,17 @@ local int stored(struct state *s)
+     len |= s->in[s->incnt++] << 8;
+     if (s->in[s->incnt++] != (~len & 0xff) ||
+         s->in[s->incnt++] != ((~len >> 8) & 0xff))
+-        return -2;                              /* didn't match complement! */
++        {}                                      /* didn't match complement; we don't care */
+ 
+     /* copy len bytes from in to out */
+     if (s->incnt + len > s->inlen)
+         return 2;                               /* not enough input */
+     if (s->out != NIL) {
+-        if (s->outcnt + len > s->outlen)
+-            return 1;                           /* not enough output space */
+-        while (len--)
++        while (len--) {
++            if (s->outcnt == s->outlen)         /* we've produced all the output we need */
++                return 1;
+             s->out[s->outcnt++] = s->in[s->incnt++];
++        }
+     }
+     else {                                      /* just scanning */
+         s->outcnt += len;
+@@ -231,7 +234,6 @@ struct huffman {
+  * - Incomplete codes are handled by this decoder, since they are permitted
+  *   in the deflate format.  See the format notes for fixed() and dynamic().
+  */
+-#ifdef SLOW
+ local int decode(struct state *s, const struct huffman *h)
+ {
+     int len;            /* current number of bits in code */
+@@ -251,60 +253,9 @@ local int decode(struct state *s, const struct huffman *h)
+         first <<= 1;
+         code <<= 1;
+     }
+-    return -10;                         /* ran out of codes */
++    return decode(s, h);                /* invalid code; ignore and retry */
+ }
+ 
+-/*
+- * A faster version of decode() for real applications of this code.   It's not
+- * as readable, but it makes puff() twice as fast.  And it only makes the code
+- * a few percent larger.
+- */
+-#else /* !SLOW */
+-local int decode(struct state *s, const struct huffman *h)
+-{
+-    int len;            /* current number of bits in code */
+-    int code;           /* len bits being decoded */
+-    int first;          /* first code of length len */
+-    int count;          /* number of codes of length len */
+-    int index;          /* index of first code of length len in symbol table */
+-    int bitbuf;         /* bits from stream */
+-    int left;           /* bits left in next or left to process */
+-    short *next;        /* next number of codes */
+-
+-    bitbuf = s->bitbuf;
+-    left = s->bitcnt;
+-    code = first = index = 0;
+-    len = 1;
+-    next = h->count + 1;
+-    while (1) {
+-        while (left--) {
+-            code |= bitbuf & 1;
+-            bitbuf >>= 1;
+-            count = *next++;
+-            if (code - count < first) { /* if length len, return symbol */
+-                s->bitbuf = bitbuf;
+-                s->bitcnt = (s->bitcnt - len) & 7;
+-                return h->symbol[index + (code - first)];
+-            }
+-            index += count;             /* else update for next length */
+-            first += count;
+-            first <<= 1;
+-            code <<= 1;
+-            len++;
+-        }
+-        left = (MAXBITS+1) - len;
+-        if (left == 0)
+-            break;
+-        if (s->incnt == s->inlen)
+-            longjmp(s->env, 1);         /* out of input */
+-        bitbuf = s->in[s->incnt++];
+-        if (left > 8)
+-            left = 8;
+-    }
+-    return -10;                         /* ran out of codes */
+-}
+-#endif /* SLOW */
+-
+ /*
+  * Given the list of code lengths length[0..n-1] representing a canonical
+  * Huffman code for n symbols, construct the tables required to decode those
+@@ -473,7 +424,7 @@ local int codes(struct state *s,
+             /* get and compute length */
+             symbol -= 257;
+             if (symbol >= 29)
+-                return -10;             /* invalid fixed code */
++                continue;               /* invalid fixed code */
+             len = lens[symbol] + bits(s, lext[symbol]);
+ 
+             /* get and check distance */
+@@ -488,9 +439,9 @@ local int codes(struct state *s,
+ 
+             /* copy length bytes from distance bytes back */
+             if (s->out != NIL) {
+-                if (s->outcnt + len > s->outlen)
+-                    return 1;
+                 while (len--) {
++                    if (s->outcnt == s->outlen)
++                        return 1;
+                     s->out[s->outcnt] =
+ #ifdef INFLATE_ALLOW_INVALID_DISTANCE_TOOFAR_ARRR
+                         dist > s->outcnt ?
+@@ -818,23 +769,20 @@ int puff(unsigned char *dest,           /* pointer to destination pointer */
+         /* process blocks until last block or error */
+         do {
+             last = bits(&s, 1);         /* one if last block */
++            last = 0;                   /* jk there's no last block */
+             type = bits(&s, 2);         /* block type 0..3 */
+             err = type == 0 ?
+                     stored(&s) :
+                     (type == 1 ?
+                         fixed(&s) :
+-                        (type == 2 ?
+-                            dynamic(&s) :
+-                            -1));       /* type == 3, invalid */
++                        0);             /* types 2 and 3 ignored */
+             if (err != 0)
+                 break;                  /* return with error */
+         } while (!last);
+     }
+ 
+     /* update the lengths and return */
+-    if (err <= 0) {
+-        *destlen = s.outcnt;
+-        *sourcelen = s.incnt;
+-    }
++    *destlen = s.outcnt;
++    *sourcelen = s.incnt;
+     return err;
+ }
